@@ -1,22 +1,19 @@
+// routes/projects.js
 const express = require('express');
+const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
-const router = express.Router();
+const config = require('../config/config');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+// Database pool
+const pool = new Pool(config.db);
 
-// PostgreSQL connection pool
-const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT || 5432
-});
+// JWT secret
+const JWT_SECRET = config.jwt.secret;
 
-// Multer configuration
+// Multer configuration (from previous implementation)
 const storage = multer.diskStorage({
   destination: './uploads/',
   filename: (req, file, cb) => {
@@ -25,36 +22,43 @@ const storage = multer.diskStorage({
   }
 });
 
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ];
+  if (allowedTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only PDF and Word documents are allowed'), false);
+  }
+};
+
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
-  fileFilter: (req, file, cb) => {
-    const filetypes = /pdf|doc|docx/;
-    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = filetypes.test(file.mimetype);
-    
-    if (extname && mimetype) {
-      return cb(null, true);
-    }
-    cb(new Error('Only PDF and Word documents are allowed'));
-  }
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: fileFilter
 });
 
 // Authentication middleware
 const auth = (requiredRole) => {
   return async (req, res, next) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
+
     try {
-      const token = req.headers.authorization?.split(' ')[1];
-      if (!token) {
-        return res.status(401).json({ error: 'No token provided' });
-      }
-
       const decoded = jwt.verify(token, JWT_SECRET);
-      if (requiredRole && decoded.role !== requiredRole) {
-        return res.status(403).json({ error: 'Unauthorized: Invalid role' });
+      const userId = decoded.userId;
+      const userRole = decoded.role;
+
+      if (requiredRole && userRole !== requiredRole) {
+        return res.status(403).json({ error: 'Insufficient permissions' });
       }
 
-      req.user = decoded;
+      req.user = { id: userId, role: userRole };
       next();
     } catch (error) {
       return res.status(401).json({ error: 'Invalid token' });
@@ -62,8 +66,9 @@ const auth = (requiredRole) => {
   };
 };
 
-// Project upload endpoint (from previous prompt)
-router.post('/upload', 
+// Previous upload endpoint
+router.post(
+  '/upload',
   auth('student'),
   upload.single('file'),
   async (req, res) => {
@@ -75,14 +80,13 @@ router.post('/upload',
     }
 
     try {
-      const studentId = req.user.userId;
       const fileUrl = `/uploads/${file.filename}`;
+      const studentId = req.user.id;
 
       const result = await pool.query(
-        `INSERT INTO projects (
-          title, abstract, keywords, student_id, status, file_url, created_at
-        ) VALUES ($1, $2, $3, $4, 'draft', $5, NOW()) RETURNING id`,
-        [title, abstract, keywords, studentId, fileUrl]
+        `INSERT INTO projects (title, abstract, keywords, student_id, status, file_url, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [title, abstract, keywords, studentId, 'draft', fileUrl, new Date()]
       );
 
       const projectId = result.rows[0].id;
@@ -93,21 +97,20 @@ router.post('/upload',
       });
     } catch (error) {
       console.error('Project upload error:', error);
-      res.status(500).json({ error: 'Internal server error' });
+      res.status(500).json({ error: 'Server error during project upload' });
     }
   }
 );
 
-// GET status history endpoint (new)
+// NEW: Get project status history
 router.get('/status/:projectId', auth('student'), async (req, res) => {
   const { projectId } = req.params;
-  const studentId = req.user.userId;
+  const studentId = req.user.id;
 
   try {
+    // Verify project exists and belongs to the student
     const projectResult = await pool.query(
-      `SELECT p.id, p.title, p.status
-       FROM projects p
-       WHERE p.id = $1 AND p.student_id = $2`,
+      'SELECT id, title, status FROM projects WHERE id = $1 AND student_id = $2',
       [projectId, studentId]
     );
 
@@ -117,18 +120,19 @@ router.get('/status/:projectId', auth('student'), async (req, res) => {
 
     const project = projectResult.rows[0];
 
+    // Get status updates
     const updatesResult = await pool.query(
-      `SELECT su.status, su.comments, su.updated_at AS date
-       FROM status_updates su
-       WHERE su.project_id = $1
-       ORDER BY su.updated_at DESC`,
+      `SELECT status, comments, updated_at 
+       FROM status_updates 
+       WHERE project_id = $1 
+       ORDER BY updated_at DESC`,
       [projectId]
     );
 
     const updates = updatesResult.rows.map(update => ({
-      date: update.date,
+      date: update.updated_at,
       status: update.status,
-      comments: update.comments || null
+      comments: update.comments || ''
     }));
 
     res.json({
@@ -138,21 +142,23 @@ router.get('/status/:projectId', auth('student'), async (req, res) => {
     });
   } catch (error) {
     console.error('Status fetch error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Server error fetching project status' });
   }
 });
 
-// POST status update endpoint (new)
+// NEW: Update project status (supervisor only)
 router.post('/status/:projectId', auth('supervisor'), async (req, res) => {
   const { projectId } = req.params;
   const { status, comments } = req.body;
 
+  // Validate input
   const validStatuses = ['draft', 'submitted', 'under_review', 'approved'];
   if (!status || !validStatuses.includes(status)) {
     return res.status(400).json({ error: 'Valid status is required' });
   }
 
   try {
+    // Verify project exists
     const projectCheck = await pool.query(
       'SELECT id FROM projects WHERE id = $1',
       [projectId]
@@ -162,23 +168,25 @@ router.post('/status/:projectId', auth('supervisor'), async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
+    // Start transaction
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
+      // Insert status update
       await client.query(
-        `INSERT INTO status_updates (project_id, status, comments, updated_at)
-         VALUES ($1, $2, $3, NOW())`,
-        [projectId, status, comments || null]
+        'INSERT INTO status_updates (project_id, status, comments, updated_at) VALUES ($1, $2, $3, $4)',
+        [projectId, status, comments || null, new Date()]
       );
 
+      // Update project status
       await client.query(
         'UPDATE projects SET status = $1 WHERE id = $2',
         [status, projectId]
       );
 
       await client.query('COMMIT');
-      res.status(200).json({ message: 'Status updated successfully' });
+      res.status(200).json({ message: 'Project status updated successfully' });
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -187,25 +195,21 @@ router.post('/status/:projectId', auth('supervisor'), async (req, res) => {
     }
   } catch (error) {
     console.error('Status update error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Server error updating project status' });
   }
 });
 
-// Multer error handling middleware
+// Multer error handling (from previous implementation)
 router.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({ error: 'File size exceeds 50MB limit' });
     }
     return res.status(400).json({ error: error.message });
+  } else if (error) {
+    return res.status(400).json({ error: error.message });
   }
-  next(error);
-});
-
-// General error handling
-router.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
+  next();
 });
 
 module.exports = router;
