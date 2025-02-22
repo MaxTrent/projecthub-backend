@@ -102,13 +102,12 @@ router.post(
   }
 );
 
-// NEW: Get project status history
+// Previous status endpoints
 router.get('/status/:projectId', auth('student'), async (req, res) => {
   const { projectId } = req.params;
   const studentId = req.user.id;
 
   try {
-    // Verify project exists and belongs to the student
     const projectResult = await pool.query(
       'SELECT id, title, status FROM projects WHERE id = $1 AND student_id = $2',
       [projectId, studentId]
@@ -120,7 +119,6 @@ router.get('/status/:projectId', auth('student'), async (req, res) => {
 
     const project = projectResult.rows[0];
 
-    // Get status updates
     const updatesResult = await pool.query(
       `SELECT status, comments, updated_at 
        FROM status_updates 
@@ -146,19 +144,16 @@ router.get('/status/:projectId', auth('student'), async (req, res) => {
   }
 });
 
-// NEW: Update project status (supervisor only)
 router.post('/status/:projectId', auth('supervisor'), async (req, res) => {
   const { projectId } = req.params;
   const { status, comments } = req.body;
 
-  // Validate input
   const validStatuses = ['draft', 'submitted', 'under_review', 'approved'];
   if (!status || !validStatuses.includes(status)) {
     return res.status(400).json({ error: 'Valid status is required' });
   }
 
   try {
-    // Verify project exists
     const projectCheck = await pool.query(
       'SELECT id FROM projects WHERE id = $1',
       [projectId]
@@ -168,23 +163,17 @@ router.post('/status/:projectId', auth('supervisor'), async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // Start transaction
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-
-      // Insert status update
       await client.query(
         'INSERT INTO status_updates (project_id, status, comments, updated_at) VALUES ($1, $2, $3, $4)',
         [projectId, status, comments || null, new Date()]
       );
-
-      // Update project status
       await client.query(
         'UPDATE projects SET status = $1 WHERE id = $2',
         [status, projectId]
       );
-
       await client.query('COMMIT');
       res.status(200).json({ message: 'Project status updated successfully' });
     } catch (error) {
@@ -199,7 +188,54 @@ router.post('/status/:projectId', auth('supervisor'), async (req, res) => {
   }
 });
 
-// Multer error handling (from previous implementation)
+// NEW: Search projects endpoint (public)
+router.get('/search', async (req, res) => {
+  const { keyword, page = 1 } = req.query;
+  const limit = 10;
+  const offset = (page - 1) * limit;
+
+  if (!keyword) {
+    return res.status(400).json({ error: 'Keyword parameter is required' });
+  }
+
+  try {
+    const searchQuery = `
+      SELECT 
+        p.id AS project_id,
+        p.title,
+        u.full_name AS author,
+        EXTRACT(YEAR FROM p.created_at) AS year,
+        p.keywords,
+        ts_rank(to_tsvector(p.keywords), to_tsquery($1)) AS relevance
+      FROM projects p
+      JOIN users u ON p.student_id = u.id
+      WHERE to_tsvector(p.keywords) @@ to_tsquery($1)
+      ORDER BY relevance DESC
+      LIMIT $2 OFFSET $3
+    `;
+
+    const result = await pool.query(searchQuery, [
+      keyword.split(' ').join(' & '), // Format for tsquery
+      limit,
+      offset
+    ]);
+
+    const projects = result.rows.map(row => ({
+      projectId: row.project_id,
+      title: row.title,
+      author: row.author,
+      year: row.year,
+      keywords: row.keywords
+    }));
+
+    res.json(projects);
+  } catch (error) {
+    console.error('Search error:', error);
+    res.status(500).json({ error: 'Server error during search' });
+  }
+});
+
+// Multer error handling
 router.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
