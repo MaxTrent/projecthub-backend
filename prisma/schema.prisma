@@ -1,9 +1,4 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
+// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,11 +8,79 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum UserRole {
+  student
+  supervisor
+  admin
+}
+
+enum ProjectStatus {
+  draft
+  submitted
+  under_review
+  approved
+}
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id        Int       @id @default(autoincrement())
+  fullName  String    @map("full_name") @db.VarChar(100)
+  email     String    @unique @db.VarChar(100)
+  password  String    @db.VarChar(255)
+  role      UserRole  @default(student)
+  createdAt DateTime  @default(now()) @map("created_at")
+  projects  Project[] @relation("StudentProjects")
+  supervisedProjects Project[] @relation("SupervisedProjects")
+  feedback  Feedback[]
+
+  @@map("users")
+}
+
+model Project {
+  id            Int            @id @default(autoincrement())
+  title         String         @db.VarChar(255)
+  abstract      String         @db.Text
+  keywords      String         @db.VarChar(255)
+  studentId     Int            @map("student_id")
+  student       User           @relation("StudentProjects", fields: [studentId], references: [id], onDelete: Cascade)
+  supervisorId  Int?           @map("supervisor_id")
+  supervisor    User?          @relation("SupervisedProjects", fields: [supervisorId], references: [id], onDelete: SetNull)
+  status        ProjectStatus  @default(draft)
+  fileUrl       String?        @map("file_url") @db.VarChar(255)
+  createdAt     DateTime       @default(now()) @map("created_at")
+  feedback      Feedback[]
+  statusUpdates StatusUpdate[]
+
+  @@index([keywords(ops: raw("GIN (to_tsvector('english', keywords))"))])
+  @@map("projects")
+}
+
+model Feedback {
+  id           Int      @id @default(autoincrement())
+  projectId    Int      @map("project_id")
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  supervisorId Int      @map("supervisor_id")
+  supervisor   User     @relation(fields: [supervisorId], references: [id], onDelete: SetNull)
+  comments     String   @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("feedback")
+}
+
+model StatusUpdate {
+  id        Int           @id @default(autoincrement())
+  projectId Int           @map("project_id")
+  project   Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status    ProjectStatus
+  comments  String?       @db.Text
+  updatedAt DateTime      @default(now()) @map("updated_at")
+
+  @@map("status_updates")
+}
+
+model Setting {
+  id          Int      @id @default(autoincrement())
+  maxFileSize Int      @default(50) @map("max_file_size")
+  defaultRole UserRole @default(student) @map("default_role")
+
+  @@map("settings")
 }

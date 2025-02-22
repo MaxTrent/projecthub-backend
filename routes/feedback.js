@@ -1,34 +1,23 @@
-// routes/feedback.js
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
-const { Pool } = require('pg');
+const { PrismaClient } = require('@prisma/client');
 const config = require('../config/config');
 
-// Database pool
-const pool = new Pool(config.db);
-
-// JWT secret
+const prisma = new PrismaClient();
 const JWT_SECRET = config.jwt.secret;
 
-// Authentication middleware
 const auth = (requiredRole) => {
   return async (req, res, next) => {
     const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({ error: 'No token provided' });
-    }
+    if (!token) return res.status(401).json({ error: 'No token provided' });
 
     try {
       const decoded = jwt.verify(token, JWT_SECRET);
-      const userId = decoded.userId;
-      const userRole = decoded.role;
-
-      if (requiredRole && userRole !== requiredRole) {
+      if (requiredRole && decoded.role !== requiredRole) {
         return res.status(403).json({ error: 'Insufficient permissions' });
       }
-
-      req.user = { id: userId, role: userRole };
+      req.user = { id: decoded.userId, role: decoded.role };
       next();
     } catch (error) {
       return res.status(401).json({ error: 'Invalid token' });
@@ -36,33 +25,27 @@ const auth = (requiredRole) => {
   };
 };
 
-// POST feedback endpoint (supervisor only)
 router.post('/feedback/:projectId', auth('supervisor'), async (req, res) => {
   const { projectId } = req.params;
   const { comments } = req.body;
-  const supervisorId = req.user.id;
 
-  // Validate input
   if (!comments) {
     return res.status(400).json({ error: 'Comments are required' });
   }
 
   try {
-    // Verify project exists
-    const projectCheck = await pool.query(
-      'SELECT id FROM projects WHERE id = $1',
-      [projectId]
-    );
-
-    if (projectCheck.rows.length === 0) {
+    const project = await prisma.project.findUnique({ where: { id: Number(projectId) } });
+    if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // Insert feedback
-    await pool.query(
-      'INSERT INTO feedback (project_id, supervisor_id, comments, created_at) VALUES ($1, $2, $3, $4)',
-      [projectId, supervisorId, comments, new Date()]
-    );
+    await prisma.feedback.create({
+      data: {
+        projectId: Number(projectId),
+        supervisorId: req.user.id,
+        comments,
+      },
+    });
 
     res.status(201).json({ message: 'Feedback submitted' });
   } catch (error) {
@@ -71,57 +54,25 @@ router.post('/feedback/:projectId', auth('supervisor'), async (req, res) => {
   }
 });
 
-// GET feedback endpoint (student or supervisor)
 router.get('/feedback/:projectId', auth(), async (req, res) => {
   const { projectId } = req.params;
-  const userId = req.user.id;
-  const userRole = req.user.role;
+  const { id: userId, role } = req.user;
 
   try {
-    // Check if user is student owning the project or a supervisor
-    let query;
-    let values;
+    const whereClause = role === 'student'
+      ? { id: Number(projectId), studentId: userId }
+      : { id: Number(projectId), feedback: { some: { supervisorId: userId } } };
 
-    if (userRole === 'student') {
-      query = `
-        SELECT f.id, f.comments, f.created_at
-        FROM feedback f
-        JOIN projects p ON p.id = f.project_id
-        WHERE f.project_id = $1 AND p.student_id = $2
-        ORDER BY f.created_at DESC
-      `;
-      values = [projectId, userId];
-    } else if (userRole === 'supervisor') {
-      query = `
-        SELECT f.id, f.comments, f.created_at
-        FROM feedback f
-        JOIN projects p ON p.id = f.project_id
-        WHERE f.project_id = $1 AND f.supervisor_id = $2
-        ORDER BY f.created_at DESC
-      `;
-      values = [projectId, userId];
-    } else {
-      return res.status(403).json({ error: 'Unauthorized role' });
+    const project = await prisma.project.findFirst({ where: whereClause });
+    if (!project && role === 'student') {
+      return res.status(404).json({ error: 'Project not found or unauthorized' });
     }
 
-    const result = await pool.query(query, values);
-
-    if (result.rows.length === 0 && userRole === 'student') {
-      // Check if project exists but has no feedback yet
-      const projectCheck = await pool.query(
-        'SELECT id FROM projects WHERE id = $1 AND student_id = $2',
-        [projectId, userId]
-      );
-      if (projectCheck.rows.length === 0) {
-        return res.status(404).json({ error: 'Project not found or unauthorized' });
-      }
-    }
-
-    const feedback = result.rows.map(row => ({
-      id: row.id,
-      comments: row.comments,
-      created_at: row.created_at
-    }));
+    const feedback = await prisma.feedback.findMany({
+      where: { projectId: Number(projectId) },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, comments: true, createdAt: true },
+    });
 
     res.json(feedback);
   } catch (error) {
