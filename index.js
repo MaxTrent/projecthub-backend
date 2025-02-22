@@ -6,6 +6,7 @@ const authRoutes = require('./routes/auth');
 const projectRoutes = require('./routes/projects');
 const feedbackRoutes = require('./routes/feedback');
 const documentRoutes = require('./routes/documents');
+const adminRoutes = require('./routes/admin');
 const path = require('path');
 
 const app = express();
@@ -21,6 +22,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/projects', feedbackRoutes);
 app.use('/api/documents', documentRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Start server
 app.listen(config.port, () => {

@@ -1,0 +1,21 @@
+services:
+  projecthub-db:
+    image: postgres:15
+    ports:
+      - 5434:5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 1234
+      POSTGRES_DB: projecthub
+    networks:
+      - projecthub
+    volumes:
+      - postgres:/var/lib/postgresql/data
+
+networks:
+  projecthub:
+    name: projecthub
+
+volumes:
+  postgres:
+    name: projecthub-postgres-db
