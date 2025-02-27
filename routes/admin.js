@@ -2,10 +2,10 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../prisma/client');
 const config = require('../config/config');
 
-const prisma = new PrismaClient();
+
 const JWT_SECRET = config.jwt.secret;
 
 const auth = () => {
@@ -125,6 +125,23 @@ router.delete('/users/:userId', auth(), async (req, res) => {
     res.status(500).json({ error: 'Server error deleting user' });
   }
 });
+
+router.delete('/users/:userId', auth(), async (req, res) => {
+    const { userId } = req.params;
+  
+    try {
+      const user = await prisma.user.findUnique({ where: { id: Number(userId) } });
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+  
+      await prisma.user.softDelete(Number(userId));
+      res.json({ message: 'User soft deleted' });
+    } catch (error) {
+      console.error('Error soft deleting user:', error);
+      res.status(500).json({ error: 'Server error deleting user' });
+    }
+  });
 
 router.get('/settings', auth(), async (req, res) => {
   try {

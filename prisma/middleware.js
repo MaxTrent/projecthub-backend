@@ -1,7 +1,7 @@
 
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../prisma/client');
 
-const prisma = new PrismaClient();
+
 
 prisma.$use(async (params, next) => {
   const before = Date.now();

@@ -3,10 +3,10 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../prisma/client');
 const config = require('../config/config');
 
-const prisma = new PrismaClient();
+
 const JWT_SECRET = config.jwt.secret;
 
 const storage = multer.diskStorage({
