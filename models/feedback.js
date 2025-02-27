@@ -1,20 +1,12 @@
 const express = require('express');
-const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const router = express.Router();
+const prisma = require('../prisma/client'); // Import centralized Prisma client
+const config = require('../config/config');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const JWT_SECRET = config.jwt.secret;
 
-// PostgreSQL connection pool
-const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT || 5432
-});
-
-// Authentication middleware (reused from previous modules)
+// Authentication middleware
 const auth = (requiredRole) => {
   return async (req, res, next) => {
     try {
@@ -49,21 +41,22 @@ router.post('/feedback/:projectId', auth('supervisor'), async (req, res) => {
 
   try {
     // Verify project exists
-    const projectCheck = await pool.query(
-      'SELECT id FROM projects WHERE id = $1',
-      [projectId]
-    );
+    const project = await prisma.project.findUnique({
+      where: { id: Number(projectId) },
+    });
 
-    if (projectCheck.rows.length === 0) {
+    if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
 
     // Insert feedback
-    await pool.query(
-      `INSERT INTO feedback (project_id, supervisor_id, comments, created_at)
-       VALUES ($1, $2, $3, NOW())`,
-      [projectId, supervisorId, comments]
-    );
+    await prisma.feedback.create({
+      data: {
+        projectId: Number(projectId),
+        supervisorId,
+        comments,
+      },
+    });
 
     res.status(201).json({ message: 'Feedback submitted' });
   } catch (error) {
@@ -72,7 +65,7 @@ router.post('/feedback/:projectId', auth('supervisor'), async (req, res) => {
   }
 });
 
-// GET feedback endpoint (student or supervisor)
+// get feedback endpoint (student or supervisor)
 router.get('/feedback/:projectId', auth(), async (req, res) => {
   const { projectId } = req.params;
   const userId = req.user.userId;
@@ -80,43 +73,35 @@ router.get('/feedback/:projectId', auth(), async (req, res) => {
 
   try {
     // Verify project exists and user has access
-    let projectQuery;
+    let whereClause;
     if (userRole === 'student') {
-      projectQuery = await pool.query(
-        `SELECT p.id
-         FROM projects p
-         WHERE p.id = $1 AND p.student_id = $2`,
-        [projectId, userId]
-      );
+      whereClause = { id: Number(projectId), studentId: userId };
     } else if (userRole === 'supervisor') {
-      projectQuery = await pool.query(
-        `SELECT p.id
-         FROM projects p
-         WHERE p.id = $1 AND (p.supervisor_id = $2 OR p.supervisor_id IS NULL)`,
-        [projectId, userId]
-      );
+      whereClause = {
+        id: Number(projectId),
+        OR: [
+          { supervisorId: userId },
+          { supervisorId: null },
+        ],
+      };
     } else {
       return res.status(403).json({ error: 'Unauthorized role' });
     }
 
-    if (projectQuery.rows.length === 0) {
+    const project = await prisma.project.findFirst({
+      where: whereClause,
+    });
+
+    if (!project) {
       return res.status(404).json({ error: 'Project not found or unauthorized' });
     }
 
     // Retrieve feedback
-    const feedbackResult = await pool.query(
-      `SELECT f.id, f.comments, f.created_at
-       FROM feedback f
-       WHERE f.project_id = $1
-       ORDER BY f.created_at DESC`,
-      [projectId]
-    );
-
-    const feedback = feedbackResult.rows.map(f => ({
-      id: f.id,
-      comments: f.comments,
-      created_at: f.created_at
-    }));
+    const feedback = await prisma.feedback.findMany({
+      where: { projectId: Number(projectId) },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, comments: true, createdAt: true },
+    });
 
     res.json(feedback);
   } catch (error) {
@@ -125,10 +110,11 @@ router.get('/feedback/:projectId', auth(), async (req, res) => {
   }
 });
 
-// General error handling
+//error handling
+
 router.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
+  next(err);
 });
 
 module.exports = router;

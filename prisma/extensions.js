@@ -6,7 +6,7 @@ const prisma = new PrismaClient().$extends({
       async softDelete(id) {
         return prisma.user.update({
           where: { id },
-          data: { email: null, role: 'student' }, // Example soft delete
+          data: { email: null, role: 'student' }, 
         });
       },
     },

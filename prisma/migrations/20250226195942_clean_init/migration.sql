@@ -1,17 +1,8 @@
-/*
-  Warnings:
-
-  - You are about to drop the `User` table. If the table is not empty, all the data it contains will be lost.
-
-*/
 -- CreateEnum
 CREATE TYPE "UserRole" AS ENUM ('student', 'supervisor', 'admin');
 
 -- CreateEnum
 CREATE TYPE "ProjectStatus" AS ENUM ('draft', 'submitted', 'under_review', 'approved');
-
--- DropTable
-DROP TABLE "User";
 
 -- CreateTable
 CREATE TABLE "users" (
@@ -74,9 +65,6 @@ CREATE TABLE "settings" (
 -- CreateIndex
 CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
 
--- CreateIndex
-CREATE INDEX "projects_keywords_idx" ON "projects"("keywords" GIN (to_tsvector('english', keywords)));
-
 -- AddForeignKey
 ALTER TABLE "projects" ADD CONSTRAINT "projects_student_id_fkey" FOREIGN KEY ("student_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
@@ -91,3 +79,6 @@ ALTER TABLE "feedback" ADD CONSTRAINT "feedback_supervisor_id_fkey" FOREIGN KEY 
 
 -- AddForeignKey
 ALTER TABLE "status_updates" ADD CONSTRAINT "status_updates_project_id_fkey" FOREIGN KEY ("project_id") REFERENCES "projects"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- Add the GIN index with proper syntax
+CREATE INDEX projects_keywords_gin_idx ON projects USING GIN (to_tsvector('english', keywords));
