@@ -5,14 +5,35 @@ const { PrismaClient } = require('@prisma/client');
 const config = require('../config/config'); // Centralized config
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require('../prisma/client')
 const JWT_SECRET = config.jwt.secret;
 const JWT_EXPIRY = config.jwt.expiresIn;
 
 const validRoles = ['student', 'supervisor', 'admin'];
 
-//function for sending consistent errors
+//function for sending errors
 const errorResponse = (res, status, message) => res.status(status).json({ error: message });
+
+const auth = (requiredRole) => {
+  return async (req, res, next) => {
+    try {
+      const token = req.headers.authorization?.split(' ')[1];
+      if (!token) {
+        return errorResponse(res, 401, 'No token provided');
+      }
+
+      const decoded = jwt.verify(token, JWT_SECRET);
+      if (requiredRole && decoded.role !== requiredRole) {
+        return errorResponse(res, 403, 'Unauthorized: Invalid role');
+      }
+
+      req.user = decoded;
+      next();
+    } catch (error) {
+      return errorResponse(res, 401, 'Invalid token');
+    }
+  };
+};
 
 // Register route
 router.post('/register', async (req, res) => {
@@ -73,6 +94,29 @@ router.post('/login', async (req, res) => {
   } catch (error) {
     console.error('Login error:', error);
     errorResponse(res, 500, 'Login failed');
+  }
+});
+
+router.get('/currentUser', auth(), async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        role: true,
+      },
+    });
+
+    if (!user) {
+      return errorResponse(res, 404, 'User not found');
+    }
+
+    res.json(user);
+  } catch (error) {
+    console.error('Error fetching user details:', error);
+    errorResponse(res, 500, 'Failed to fetch user details');
   }
 });
 

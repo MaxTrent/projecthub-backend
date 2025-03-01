@@ -4,6 +4,7 @@ const config = require('./config/config');
 const path = require('path');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
+const cors = require('cors');
 
 // Routes
 const authRoutes = require('./routes/auth');
@@ -15,6 +16,7 @@ const adminRoutes = require('./routes/admin');
 const app = express();
 
 app.use(express.json());
+app.use(cors({ origin: 'http://localhost:5173' }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // API routes
