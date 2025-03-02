@@ -282,7 +282,6 @@ const jwt = require('jsonwebtoken');
 const prisma = require('../prisma/client');
 const config = require('../config/config');
 
-
 const JWT_SECRET = config.jwt.secret;
 
 const storage = multer.diskStorage({
@@ -294,15 +293,14 @@ const storage = multer.diskStorage({
 });
 
 const getUploadMiddleware = async () => {
-    const settings = await prisma.setting.findFirst();
-    const maxSize = (settings?.maxFileSize || 50) * 1024 * 1024;
-  
-    return multer({
-      storage,
-      limits: { fileSize: maxSize },
-      fileFilter,
-    });
-  };
+  const settings = await prisma.setting.findFirst();
+  const maxSize = (settings?.maxFileSize || 50) * 1024 * 1024;
+  return multer({
+    storage,
+    limits: { fileSize: maxSize },
+    fileFilter,
+  });
+};
 
 const fileFilter = (req, file, cb) => {
   const allowedTypes = [
@@ -313,17 +311,10 @@ const fileFilter = (req, file, cb) => {
   cb(null, allowedTypes.includes(file.mimetype));
 };
 
-const upload = multer({
-  storage,
-  limits: { fileSize: 50 * 1024 * 1024 },
-  fileFilter,
-});
-
 const auth = (requiredRole) => {
   return async (req, res, next) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'No token provided' });
-
     try {
       const decoded = jwt.verify(token, JWT_SECRET);
       if (requiredRole && decoded.role !== requiredRole) {
@@ -337,10 +328,12 @@ const auth = (requiredRole) => {
   };
 };
 
+
+// Student uploads initial project
 router.post('/upload', auth('student'), async (req, res, next) => {
-    const uploadMiddleware = await getUploadMiddleware();
-    uploadMiddleware.single('file')(req, res, next);
-  }, async (req, res) => {
+  const uploadMiddleware = await getUploadMiddleware();
+  uploadMiddleware.single('file')(req, res, next);
+}, async (req, res) => {
   const { title, abstract, keywords } = req.body;
   const file = req.file;
 
@@ -349,6 +342,13 @@ router.post('/upload', auth('student'), async (req, res, next) => {
   }
 
   try {
+    const existingProject = await prisma.project.findFirst({
+      where: { studentId: req.user.id },
+    });
+    if (existingProject) {
+      return res.status(400).json({ error: 'You already have a project assigned' });
+    }
+
     const fileUrl = `/uploads/${file.filename}`;
     const project = await prisma.project.create({
       data: {
@@ -368,6 +368,49 @@ router.post('/upload', auth('student'), async (req, res, next) => {
   }
 });
 
+// Student resubmits project
+router.put('/upload/:projectId', auth('student'), async (req, res, next) => {
+  const uploadMiddleware = await getUploadMiddleware();
+  uploadMiddleware.single('file')(req, res, next);
+}, async (req, res) => {
+  const { projectId } = req.params;
+  const { title, abstract, keywords } = req.body;
+  const file = req.file;
+
+  try {
+    const project = await prisma.project.findFirst({
+      where: { id: Number(projectId), studentId: req.user.id },
+    });
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found or unauthorized' });
+    }
+    if (project.status === 'approved') {
+      return res.status(400).json({ error: 'Cannot modify approved project' });
+    }
+
+    const updateData = {
+      title,
+      abstract,
+      keywords,
+      status: 'submitted',
+    };
+    if (file) {
+      updateData.fileUrl = `/uploads/${file.filename}`;
+    }
+
+    const updatedProject = await prisma.project.update({
+      where: { id: Number(projectId) },
+      data: updateData,
+    });
+
+    res.status(200).json({ projectId: updatedProject.id, message: 'Project updated successfully' });
+  } catch (error) {
+    console.error('Project update error:', error);
+    res.status(500).json({ error: 'Server error updating project' });
+  }
+});
+
+// Student fetches project status
 router.get('/status/:projectId', auth('student'), async (req, res) => {
   const { projectId } = req.params;
 
@@ -402,21 +445,19 @@ router.get('/status/:projectId', auth('student'), async (req, res) => {
   }
 });
 
+// Supervisor updates project status
 router.post('/status/:projectId', auth('supervisor'), async (req, res) => {
   const { projectId } = req.params;
   const { status, comments } = req.body;
-
   const validStatuses = ['draft', 'submitted', 'under_review', 'approved'];
   if (!status || !validStatuses.includes(status)) {
     return res.status(400).json({ error: 'Valid status is required' });
   }
-
   try {
     const project = await prisma.project.findUnique({ where: { id: Number(projectId) } });
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
-
     await prisma.$transaction([
       prisma.statusUpdate.create({
         data: { projectId: Number(projectId), status, comments },
@@ -426,7 +467,6 @@ router.post('/status/:projectId', auth('supervisor'), async (req, res) => {
         data: { status },
       }),
     ]);
-
     res.status(200).json({ message: 'Project status updated successfully' });
   } catch (error) {
     console.error('Status update error:', error);
@@ -434,6 +474,7 @@ router.post('/status/:projectId', auth('supervisor'), async (req, res) => {
   }
 });
 
+// Search projects
 router.get('/search', async (req, res) => {
   const { keyword, page = 1 } = req.query;
   const limit = 10;
@@ -446,20 +487,16 @@ router.get('/search', async (req, res) => {
   try {
     const projects = await prisma.project.findMany({
       where: {
+        status: 'approved', // Only approved projects
         OR: [
           { title: { contains: keyword, mode: 'insensitive' } },
           { keywords: { contains: keyword, mode: 'insensitive' } },
           { student: { fullName: { contains: keyword, mode: 'insensitive' } } },
-          // Search by year (convert keyword to number if applicable)
           { createdAt: { gte: new Date(`${keyword}-01-01`), lte: new Date(`${keyword}-12-31`) } },
         ],
       },
-      include: {
-        student: { select: { fullName: true } },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
+      include: { student: { select: { fullName: true } } },
+      orderBy: { createdAt: 'desc' },
       take: limit,
       skip,
     });
@@ -472,7 +509,7 @@ router.get('/search', async (req, res) => {
       keywords: p.keywords,
     }));
 
-    console.log('Search results sent:', results); // Debug log
+    console.log('Search results sent:', results); // Debug
     res.json(results);
   } catch (error) {
     console.error('Search error:', error);
@@ -480,6 +517,7 @@ router.get('/search', async (req, res) => {
   }
 });
 
+// Get project details
 router.get('/:projectId', auth(), async (req, res) => {
   const { projectId } = req.params;
   const { id: userId, role } = req.user;
@@ -487,7 +525,7 @@ router.get('/:projectId', auth(), async (req, res) => {
   try {
     const whereClause = role === 'student'
       ? { id: Number(projectId), studentId: userId }
-      : { id: Number(projectId) }; // Supervisors can view any project
+      : { id: Number(projectId) };
 
     const project = await prisma.project.findFirst({
       where: whereClause,
@@ -512,6 +550,59 @@ router.get('/:projectId', auth(), async (req, res) => {
     res.status(500).json({ error: 'Server error fetching project details' });
   }
 });
+
+
+
+// Fetch student’s project
+router.get('/student/project', auth('student'), async (req, res) => {
+  try {
+    const project = await prisma.project.findFirst({
+      where: { studentId: req.user.id },
+      select: { id: true, title: true, status: true },
+    });
+
+    if (!project) {
+      return res.status(200).json(null); // No project yet
+    }
+
+    res.json({
+      projectId: project.id,
+      title: project.title,
+      status: project.status,
+    });
+  } catch (error) {
+    console.error('Error fetching student project:', error);
+    res.status(500).json({ error: 'Server error fetching student project' });
+  }
+});
+
+// Fetch supervisor’s projects
+router.get('/supervisor/projects', auth('supervisor'), async (req, res) => {
+  const { id: supervisorId } = req.user;
+
+  try {
+    const projects = await prisma.project.findMany({
+      where: { supervisorId: supervisorId },
+      include: { student: { select: { fullName: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const results = projects.map(project => ({
+      id: project.id,
+      title: project.title,
+      studentName: project.student.fullName,
+      status: project.status,
+    }));
+
+    res.json({ projects: results });
+  } catch (error) {
+    console.error('Error fetching supervisor projects:', error);
+    res.status(500).json({ error: 'Server error fetching supervisor projects' });
+  }
+});
+
+
+
 
 router.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {

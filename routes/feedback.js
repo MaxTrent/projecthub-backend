@@ -25,7 +25,7 @@ const auth = (requiredRole) => {
   };
 };
 
-router.post('/feedback/:projectId', auth('supervisor'), async (req, res) => {
+router.post('/:projectId', auth('supervisor'), async (req, res) => {
   const { projectId } = req.params;
   const { comments } = req.body;
 
@@ -54,37 +54,70 @@ router.post('/feedback/:projectId', auth('supervisor'), async (req, res) => {
   }
 });
 
-router.get('/feedback/:projectId', auth(), async (req, res) => {
+// router.get('/feedback/:projectId', auth(), async (req, res) => {
+//   const { projectId } = req.params;
+//   const { id: userId, role } = req.user;
+
+//   try {
+//     const whereClause = role === 'student'
+//       ? { id: Number(projectId), studentId: userId }
+//       : { id: Number(projectId), feedback: { some: { supervisorId: userId } } };
+
+//     const project = await prisma.project.findFirst({ 
+//       where: whereClause,
+//       select: { 
+//         title: true 
+//       },
+//     });
+
+//     if (!project && role === 'student') {
+//       return res.status(404).json({ error: 'Project not found or unauthorized' });
+//     }
+
+//     const feedback = await prisma.feedback.findMany({
+//       where: { projectId: Number(projectId) },
+//       orderBy: { createdAt: 'desc' },
+//       select: { id: true, comments: true, createdAt: true },
+//     });
+
+//     // Return both title and feedback in the response
+//     res.json({
+//       title: project ? project.title : 'Unknown Project', // Fallback if no project (e.g., supervisor with no feedback yet)
+//       feedback: feedback
+//     });
+//   } catch (error) {
+//     console.error('Feedback retrieval error:', error);
+//     res.status(500).json({ error: 'Server error retrieving feedback' });
+//   }
+// });
+
+
+// Fetch feedback
+router.get('/:projectId', auth(), async (req, res) => {
   const { projectId } = req.params;
   const { id: userId, role } = req.user;
 
   try {
     const whereClause = role === 'student'
       ? { id: Number(projectId), studentId: userId }
-      : { id: Number(projectId), feedback: { some: { supervisorId: userId } } };
+      : { id: Number(projectId), supervisorId: userId }; // Supervisors see their assigned projects
 
     const project = await prisma.project.findFirst({ 
       where: whereClause,
-      select: { 
-        title: true 
-      },
+      select: { title: true },
     });
 
-    if (!project && role === 'student') {
+    if (!project) {
       return res.status(404).json({ error: 'Project not found or unauthorized' });
     }
 
-    const feedback = await prisma.feedback.findMany({
+    const feedback = await prisma.statusUpdate.findMany({
       where: { projectId: Number(projectId) },
-      orderBy: { createdAt: 'desc' },
-      select: { id: true, comments: true, createdAt: true },
+      orderBy: { updatedAt: 'desc' }, // Use updatedAt from StatusUpdate
+      select: { id: true, comments: true, updatedAt: true },
     });
 
-    // Return both title and feedback in the response
-    res.json({
-      title: project ? project.title : 'Unknown Project', // Fallback if no project (e.g., supervisor with no feedback yet)
-      feedback: feedback
-    });
+    res.json({ title: project.title, feedback });
   } catch (error) {
     console.error('Feedback retrieval error:', error);
     res.status(500).json({ error: 'Server error retrieving feedback' });

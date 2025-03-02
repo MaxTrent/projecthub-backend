@@ -8,14 +8,13 @@ const config = require('../config/config');
 
 const JWT_SECRET = config.jwt.secret;
 
-const auth = () => {
+const auth = (requireAdmin = false) => {
   return async (req, res, next) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'No token provided' });
-
     try {
       const decoded = jwt.verify(token, JWT_SECRET);
-      if (decoded.role !== 'admin') {
+      if (requireAdmin && decoded.role !== 'admin') {
         return res.status(403).json({ error: 'Admin access required' });
       }
       req.user = { id: decoded.userId, role: decoded.role };
@@ -143,20 +142,22 @@ router.delete('/users/:userId', auth(), async (req, res) => {
     }
   });
 
-router.get('/settings', auth(), async (req, res) => {
-  try {
-    let settings = await prisma.setting.findFirst();
-    if (!settings) {
-      settings = await prisma.setting.create({
-        data: { maxFileSize: 50, defaultRole: 'student' },
-      });
+  router.get('/settings', auth(), async (req, res) => {
+    try {
+      let settings = await prisma.setting.findFirst();
+      if (!settings) {
+        settings = await prisma.setting.create({
+          data: { maxFileSize: 50, defaultRole: 'student' },
+        });
+      }
+      res.json({ maxFileSize: settings.maxFileSize, defaultRole: settings.defaultRole });
+    } catch (error) {
+      console.error('Error fetching settings:', error);
+      res.status(500).json({ error: 'Server error fetching settings' });
     }
-    res.json({ maxFileSize: settings.maxFileSize, defaultRole: settings.defaultRole });
-  } catch (error) {
-    console.error('Error fetching settings:', error);
-    res.status(500).json({ error: 'Server error fetching settings' });
-  }
-});
+  });
+  
+  router.put('/settings', auth(true), async (req, res) => { /* unchanged */ });
 
 router.put('/settings', auth(), async (req, res) => {
   const { maxFileSize, defaultRole } = req.body;
@@ -187,6 +188,40 @@ router.put('/settings', auth(), async (req, res) => {
   } catch (error) {
     console.error('Error updating settings:', error);
     res.status(500).json({ error: 'Server error updating settings' });
+  }
+});
+
+// router.post('/admin/assign-supervisor', auth('admin'), async (req, res) => {
+//   const { studentId, supervisorId } = req.body;
+//   try {
+//     await prisma.project.updateMany({
+//       where: { studentId: Number(studentId) },
+//       data: { supervisorId: Number(supervisorId) },
+//     });
+//     res.status(200).json({ message: 'Supervisor assigned' });
+//   } catch (error) {
+//     console.error('Assignment error:', error);
+//     res.status(500).json({ error: 'Server error assigning supervisor' });
+//   }
+// });
+
+// Admin assigns supervisor to student
+router.post('/assign-supervisor', auth('admin'), async (req, res) => {
+  const { studentId, supervisorId } = req.body;
+  try {
+    const student = await prisma.user.findUnique({ where: { id: Number(studentId) } });
+    const supervisor = await prisma.user.findUnique({ where: { id: Number(supervisorId) } });
+    if (!student || !supervisor) {
+      return res.status(404).json({ error: 'Student or supervisor not found' });
+    }
+    await prisma.project.updateMany({
+      where: { studentId: Number(studentId) },
+      data: { supervisorId: Number(supervisorId) },
+    });
+    res.status(200).json({ message: 'Supervisor assigned successfully' });
+  } catch (error) {
+    console.error('Assignment error:', error);
+    res.status(500).json({ error: 'Server error assigning supervisor' });
   }
 });
 

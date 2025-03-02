@@ -70,7 +70,8 @@ router.post('/register', async (req, res) => {
     console.error('Registration error:', error);
     errorResponse(res, 500, 'Registration failed');
   }
-});
+}
+);
 
 // Login route
 router.post('/login', async (req, res) => {
@@ -119,5 +120,24 @@ router.get('/currentUser', auth(), async (req, res) => {
     errorResponse(res, 500, 'Failed to fetch user details');
   }
 });
+
+
+router.get('/users', auth('admin'), async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        role: true,
+      },
+    });
+    res.json(users);
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    res.status(500).json({ error: 'Server error fetching users' });
+  }
+});
+
 
 module.exports = router;
