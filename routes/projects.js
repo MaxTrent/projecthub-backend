@@ -450,7 +450,7 @@ router.get('/search', async (req, res) => {
           { title: { contains: keyword, mode: 'insensitive' } },
           { keywords: { contains: keyword, mode: 'insensitive' } },
           { student: { fullName: { contains: keyword, mode: 'insensitive' } } },
-          // Optional: Search by year (convert keyword to number if applicable)
+          // Search by year (convert keyword to number if applicable)
           { createdAt: { gte: new Date(`${keyword}-01-01`), lte: new Date(`${keyword}-12-31`) } },
         ],
       },
@@ -477,6 +477,39 @@ router.get('/search', async (req, res) => {
   } catch (error) {
     console.error('Search error:', error);
     res.status(500).json({ error: 'Server error during search' });
+  }
+});
+
+router.get('/:projectId', auth(), async (req, res) => {
+  const { projectId } = req.params;
+  const { id: userId, role } = req.user;
+
+  try {
+    const whereClause = role === 'student'
+      ? { id: Number(projectId), studentId: userId }
+      : { id: Number(projectId) }; // Supervisors can view any project
+
+    const project = await prisma.project.findFirst({
+      where: whereClause,
+      include: { student: { select: { fullName: true } } },
+    });
+
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found or unauthorized' });
+    }
+
+    res.json({
+      projectId: project.id,
+      title: project.title,
+      author: project.student.fullName,
+      year: project.createdAt.getFullYear(),
+      keywords: project.keywords,
+      abstract: project.abstract,
+      fileUrl: project.fileUrl,
+    });
+  } catch (error) {
+    console.error('Error fetching project details:', error);
+    res.status(500).json({ error: 'Server error fetching project details' });
   }
 });
 
